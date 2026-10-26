@@ -1,7 +1,11 @@
-#output "instance_ami" {
-#  value = aws_instance.web.ami
-#}
+output "controller_ip" {
+  value = aws_instance.controller.public_ip
+}
 
-#output "instance_arn" {
-#  value = aws_instance.web.arn
-#}
+output "node1_ip" {
+  value = aws_instance.node1.public_ip
+}
+
+output "node2_ip" {
+  value = aws_instance.node2.public_ip
+}
