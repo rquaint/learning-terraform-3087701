@@ -1,111 +1,76 @@
-data "aws_ami" "app_ami" {
-  most_recent = true
+variable "my_ip" {
+  description = "Your public IP as CIDR, e.g. 203.0.113.10/32"
+  type        = string
+}
 
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023*-x86_64"]
   }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-
-  owners = ["amazon"]
 }
 
-# Ansible Controller
+resource "aws_key_pair" "lab" {
+  key_name   = "test_aws_key"
+  public_key = file("~/.ssh/id_ed25519.pub")
+}
+
+resource "aws_security_group" "lab" {
+  name        = "ansible-lab"
+  description = "SSH from my IP, all traffic inside the group"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip]
+  }
+
+  ingress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    self      = true
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_instance" "controller" {
-  ami           = data.aws_ami.app_ami.id
-  instance_type = "t3.micro"
-  key_name      = "test_aws_key"  # your .pem key name in AWS
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = "t3.micro"
+  key_name               = aws_key_pair.lab.key_name
+  vpc_security_group_ids = [aws_security_group.lab.id]
 
   user_data = <<-EOF
     #!/bin/bash
-    # Enable root SSH
-    sed -i 's/PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config
-    sed -i 's/#PermitRootLogin yes/PermitRootLogin yes/' /etc/ssh/sshd_config
-
-    # SSH keepalive
-    echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config
-    echo "ClientAliveCountMax 10" >> /etc/ssh/sshd_config
-
-    # Enable password auth
-    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-
-    # Install packages
-    dnf install -y ansible python3 vim tmux bash-completion
-
-    # Install Terraform
-    yum install -y yum-utils
-    yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
-    yum install -y terraform
-
-    # Create ansible user
-    useradd ansible
-    echo "ansible:procoreplus" | chpasswd
-    usermod -aG wheel ansible
-    echo "ansible ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ansible
-
-    # Bash completion
-    echo "source /etc/profile.d/bash_completion.sh" >> /root/.bashrc
-
-    systemctl restart sshd
+    dnf install -y ansible-core vim tmux
   EOF
 
-  tags = {
-    Name = "ansible-controller"
-  }
+  tags = { Name = "ansible-controller" }
 }
 
-# Managed Node 1
-resource "aws_instance" "node1" {
-  ami           = data.aws_ami.app_ami.id
-  instance_type = "t3.micro"
-  key_name      = "test_aws_key"
+resource "aws_instance" "managed" {
+  count                  = 2
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = "t3.micro"
+  key_name               = aws_key_pair.lab.key_name
+  vpc_security_group_ids = [aws_security_group.lab.id]
 
-  user_data = <<-EOF
-    #!/bin/bash
-    sed -i 's/PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config
-    sed -i 's/#PermitRootLogin yes/PermitRootLogin yes/' /etc/ssh/sshd_config
-    echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config
-    echo "ClientAliveCountMax 10" >> /etc/ssh/sshd_config
-    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-    dnf install -y python3 vim bash-completion
-    useradd ansible
-    echo "ansible:procoreplus" | chpasswd
-    usermod -aG wheel ansible
-    echo "ansible ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ansible
-    systemctl restart sshd
-  EOF
-
-  tags = {
-    Name = "ansible-node1"
-  }
+  tags = { Name = "ansible-node${count.index + 1}" }
 }
 
-# Managed Node 2
-resource "aws_instance" "node2" {
-  ami           = data.aws_ami.app_ami.id
-  instance_type = "t3.micro"
-  key_name      = "test_aws_key"
+output "controller_ip" {
+  value = aws_instance.controller.public_ip
+}
 
-  user_data = <<-EOF
-    #!/bin/bash
-    sed -i 's/PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config
-    sed -i 's/#PermitRootLogin yes/PermitRootLogin yes/' /etc/ssh/sshd_config
-    echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config
-    echo "ClientAliveCountMax 10" >> /etc/ssh/sshd_config
-    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-    dnf install -y python3 vim bash-completion
-    useradd ansible
-    echo "ansible:procoreplus" | chpasswd
-    usermod -aG wheel ansible
-    echo "ansible ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ansible
-    systemctl restart sshd
-  EOF
-
-  tags = {
-    Name = "ansible-node2"
-  }
+output "managed_private_ips" {
+  value = aws_instance.managed[*].private_ip
 }
